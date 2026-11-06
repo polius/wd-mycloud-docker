@@ -1,0 +1,9 @@
+# build output (make-app.sh builds next to itself, in app-build/)
+app-build/
+docker-build/
+*.bin
+
+# output of export-docker-run.sh: the exact file CONTAINS SECRETS
+docker-recreate-*.sh
+
+.DS_Store

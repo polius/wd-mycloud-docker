@@ -1,0 +1,121 @@
+name: Release
+
+# Daily: if Docker published a new stable release, build the app (.bin) for every model
+# and publish it as a GitHub release "v<docker version>". Nothing new: the run just ends.
+#
+# Actions are pinned to full commit SHAs (tag in the trailing comment); Dependabot bumps both.
+
+on:
+  schedule:
+    - cron: "23 5 * * *" # every day at 05:23 UTC
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Docker version to build, e.g. 29.9.3 (empty: the latest stable of SUPPORTED_MAJOR)"
+        required: false
+        default: ""
+      replace:
+        description: "If that release already exists, rebuild it and replace its files"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  # Scheduled runs only follow this Docker major version. A new major (e.g. 30) may drop
+  # something these NAS kernels need (cgroup v1), so it is built by hand (Run workflow,
+  # with its version) after testing it on a NAS; then raise this value.
+  SUPPORTED_MAJOR: "29"
+  # mksapkg model names, one .bin each. Intel (x86_64) OS5 models only.
+  MODELS: "MyCloudPR2100 MyCloudPR4100"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Pick the Docker version
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REPLACE: ${{ inputs.replace }}
+        run: |
+          set -euo pipefail
+          url=https://download.docker.com/linux/static/stable/x86_64/
+          vsort() { sort -u -t. -k1,1n -k2,2n -k3,3n; }
+          all=$(curl -fsSL --retry 3 "$url" | grep -o 'docker-[0-9]*\.[0-9]*\.[0-9]*\.tgz' \
+                | sed 's/^docker-//; s/\.tgz$//' | vsort)
+          newest=$(tail -n1 <<<"$all")
+          supported=$(grep "^${SUPPORTED_MAJOR}\." <<<"$all" | tail -n1 || true)
+          version=${INPUT_VERSION:-$supported}
+
+          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::no valid Docker version ('$version')"; exit 1; }
+          grep -qx "$version" <<<"$all" || { echo "::error::Docker $version is not published at $url"; exit 1; }
+          if (( ${newest%%.*} > SUPPORTED_MAJOR )); then
+            echo "::warning::Docker $newest (a new major version) is available. Test it on a NAS, build it with Run workflow, then raise SUPPORTED_MAJOR."
+          fi
+
+          build=true; exists=false
+          if gh release view "v$version" >/dev/null 2>&1; then
+            exists=true
+            if [[ ${REPLACE:-false} != true ]]; then
+              build=false
+              echo "Release v$version already exists: nothing to do."
+            fi
+          fi
+
+          # "Latest" only if no higher version has been released (e.g. a manual older build)
+          highest=$( { gh release list --limit 200 --json tagName --jq '.[].tagName' | sed 's/^v//' \
+                       | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'; echo "$version"; } | vsort | tail -n1)
+          latest=$([[ $highest == "$version" ]] && echo true || echo false)
+
+          {
+            echo "version=$version"
+            echo "build=$build"
+            echo "exists=$exists"
+            echo "latest=$latest"
+          } >>"$GITHUB_OUTPUT"
+          echo "Docker $version: build=$build exists=$exists latest=$latest (newest published: $newest)"
+
+      - name: Build the app
+        if: steps.pick.outputs.build == 'true'
+        env:
+          VERSION: ${{ steps.pick.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir app-build
+          cp make-app.sh dockerctl.sh app-build/
+          # Same throwaway container as for a local build: it only sees app-build/.
+          docker run --rm --platform linux/amd64 -e MODELS -v "$PWD/app-build:/out" debian:bookworm-slim \
+            bash -c 'apt-get update -qq &&
+                     apt-get install -y -qq --no-install-recommends curl ca-certificates openssl libxml2 >/dev/null &&
+                     bash /out/make-app.sh "$1"' _ "$VERSION"
+          (cd app-build && sha256sum -c SHA256SUMS)
+
+      - name: Publish the release
+        if: steps.pick.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.pick.outputs.version }}
+          EXISTS: ${{ steps.pick.outputs.exists }}
+          LATEST: ${{ steps.pick.outputs.latest }}
+        run: |
+          set -euo pipefail
+          cd app-build
+          files=(*.bin SHA256SUMS)
+          if [[ $EXISTS == true ]]; then
+            gh release upload "v$VERSION" "${files[@]}" --clobber
+            gh release edit "v$VERSION" --notes-file release-notes.md
+          else
+            gh release create "v$VERSION" "${files[@]}" \
+              --title "Docker $VERSION" --notes-file release-notes.md \
+              --target "$GITHUB_SHA" --latest="$LATEST"
+          fi

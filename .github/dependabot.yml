@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # GitHub Actions (SHA-pinned; Dependabot updates the SHA and the tag comment)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
