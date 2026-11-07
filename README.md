@@ -48,7 +48,7 @@ Install the newer `.bin` the same way: **Apps > Install an app manually**. Your 
 
 ## Uninstall
 
-In the dashboard, open the **Docker** app and choose **Uninstall**. Your data is kept in `/mnt/HD/HD_a2/Nas_Prog/docker_data` until you delete it.
+In the dashboard, open the **Docker** app and choose **Uninstall**. Docker's own data (images, containers, Docker volumes, settings and logs) is kept in `/mnt/HD/HD_a2/Nas_Prog/docker_data` until you delete it. Folders you mounted into containers are never touched.
 
 ## Good to know
 
