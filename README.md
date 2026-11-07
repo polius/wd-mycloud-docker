@@ -2,7 +2,7 @@
 <img src="docs/assets/icon.png" alt="Docker for WD My Cloud" width="96">
 <h1 align="center">Docker for WD My Cloud</h1>
 
-**The official Docker Engine, always up to date, on your WD My Cloud OS5 NAS: installed and updated from the dashboard.**
+**The official Docker Engine, always up to date, on your WD My Cloud OS5 NAS.**
 
 <p align="center">
 <a href="https://github.com/polius/wd-mycloud-docker/actions/workflows/release.yml"><img src="https://github.com/polius/wd-mycloud-docker/actions/workflows/release.yml/badge.svg" alt="Release"></a>&nbsp;<a href="https://github.com/polius/wd-mycloud-docker/releases/latest"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/polius/wd-mycloud-docker"></a>&nbsp;<a href="https://github.com/polius/wd-mycloud-docker/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/polius/wd-mycloud-docker/total"></a>&nbsp;<a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
