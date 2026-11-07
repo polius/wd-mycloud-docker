@@ -197,7 +197,7 @@ Over SSH it runs in the background, so it finishes even if your connection drops
 ## Good to know
 
 - **Disk usage**: the WD kernel has no overlayfs, so Docker uses the `vfs` storage driver, which stores every image layer as a full copy. Images take several times more disk space than on a typical Linux machine (about 10 GB for ten common images).
-- **cgroup v1**: the WD kernel (4.14) only has cgroup v1. Docker 29 supports it, but has announced its removal by May 2029. Releases follow Docker 29 automatically; a new major version is only published after it has been tested on a NAS.
+- **cgroup v1**: the WD kernel (4.14) only has cgroup v1. Docker 29 supports it, but has announced its removal by May 2029. Releases follow new Docker versions automatically, new major versions included, so check the release notes before installing a new major.
 - **Container port isolation**: the kernel has no iptables `raw` table, so Docker runs with `DOCKER_INSECURE_NO_IPTABLES_RAW=1`. This drops a hardening rule that blocks other hosts on your LAN from reaching container ports directly through routing; ports you publish with `-p` work as usual.
 - **IPv6**: container IPv6 NAT is off (`"ip6tables": false`), because the kernel lacks `ip6table_nat`.
 - **No bundled UI**: unlike the community app, Portainer is not installed. Run it as a container if you want it.
@@ -260,7 +260,7 @@ The release notes also list the SHA-256 of Docker's official `docker-<version>.t
 
 ## How releases are made
 
-Every day, a [workflow](.github/workflows/release.yml) checks download.docker.com for a new stable Docker release. If there is one, it builds the app for every supported model and publishes it as a release named after the Docker version (`v29.9.3`). New major versions of Docker are published by hand, once tested on a NAS.
+Every day, a [workflow](.github/workflows/release.yml) checks download.docker.com for a new stable Docker release. If there is one, it builds the app for every supported model and publishes it as a release named after the Docker version (`v29.9.3`). New major versions (e.g. 30) are published the same way.
 
 ## Disclaimer
 

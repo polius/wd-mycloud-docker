@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Docker version to build, e.g. 29.9.3 (empty: the latest stable of SUPPORTED_MAJOR)"
+        description: "Docker version to build, e.g. 29.9.3 (empty: the latest stable release)"
         required: false
         default: ""
       replace:
@@ -27,10 +27,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Scheduled runs only follow this Docker major version. A new major (e.g. 30) may drop
-  # something these NAS kernels need (cgroup v1), so it is built by hand (Run workflow,
-  # with its version) after testing it on a NAS; then raise this value.
-  SUPPORTED_MAJOR: "29"
   # mksapkg model names, one .bin each. Intel (x86_64) OS5 models only.
   MODELS: "MyCloudPR2100 MyCloudPR4100"
 
@@ -54,14 +50,10 @@ jobs:
           all=$(curl -fsSL --retry 3 "$url" | grep -o 'docker-[0-9]*\.[0-9]*\.[0-9]*\.tgz' \
                 | sed 's/^docker-//; s/\.tgz$//' | vsort)
           newest=$(tail -n1 <<<"$all")
-          supported=$(grep "^${SUPPORTED_MAJOR}\." <<<"$all" | tail -n1 || true)
-          version=${INPUT_VERSION:-$supported}
+          version=${INPUT_VERSION:-$newest}
 
           [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::no valid Docker version ('$version')"; exit 1; }
           grep -qx "$version" <<<"$all" || { echo "::error::Docker $version is not published at $url"; exit 1; }
-          if (( ${newest%%.*} > SUPPORTED_MAJOR )); then
-            echo "::warning::Docker $newest (a new major version) is available. Test it on a NAS, build it with Run workflow, then raise SUPPORTED_MAJOR."
-          fi
 
           build=true; exists=false
           if gh release view "v$version" >/dev/null 2>&1; then
