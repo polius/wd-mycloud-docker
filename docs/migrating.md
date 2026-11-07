@@ -1,0 +1,34 @@
+# Migrating from the community Docker app
+
+If you run Docker through the older community app (WDCommunity, Docker 20.10), move your containers over in a few steps. Do this from your local network: if you reach the NAS remotely through a container (a Cloudflare tunnel, for example), that access goes down while Docker is switched.
+
+1. **Save the commands that recreate your containers.** With the old Docker still running, on the NAS:
+
+   ```bash
+   mkdir -p /mnt/HD/HD_a2/docker-migration && cd /mnt/HD/HD_a2/docker-migration
+   curl -fsSLO https://raw.githubusercontent.com/polius/wd-mycloud-docker/main/export-docker-run.sh
+   bash export-docker-run.sh
+   ```
+
+2. **Uninstall the old Docker app** in the dashboard. WD leaves its folder behind, and the new app installs into the same place, so remove it and restart the NAS:
+
+   ```bash
+   rm -rf /mnt/HD/HD_a2/Nas_Prog/docker
+   reboot
+   ```
+
+3. **Install this app** ([Install](../README.md#install)).
+
+4. **Recreate your containers:**
+
+   ```bash
+   sh /mnt/HD/HD_a2/docker-migration/docker-recreate-<date>.sh
+   ```
+
+   Images are pulled again by tag, so `:latest` images may be newer than the ones you had. Check that every container starts (`docker ps -a`); a much newer image may need a changed setting.
+
+Once everything works, delete the old Docker data to free the space:
+
+```bash
+rm -rf /mnt/HD/HD_a2/Nas_Prog/_docker
+```
