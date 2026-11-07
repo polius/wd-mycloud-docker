@@ -38,15 +38,18 @@ Intel models with **My Cloud OS 5** only. ARM models (EX2 Ultra, EX2100, EX4100,
 
 1. Download the `.bin` for your model from the [latest release](https://github.com/polius/wd-mycloud-docker/releases/latest).
 2. In the NAS dashboard, go to **Apps > Install an app manually** and choose the file. Docker starts right away.
-3. Docker is used over SSH. Turn it on in **Settings > Network > SSH**, then connect from your computer with the password you set there:
-
-   ```bash
-   ssh sshd@<NAS_IP>
-   ```
-
-Give every container `--restart unless-stopped` so it starts again by itself after an update or a reboot. Without it, the container is kept but stays stopped until you run `docker start <name>`.
 
 > Already using the old community Docker app? Follow [Migrating](docs/migrating.md) instead, so your containers come along.
+
+## Using Docker
+
+Docker is used over SSH. Turn it on in **Settings > Network > SSH**, then connect from your computer with the password you set there:
+
+```bash
+ssh sshd@<NAS_IP>
+```
+
+Give every container `--restart unless-stopped` so it starts again by itself after an update or a reboot. Without it, the container is kept but stays stopped until you run `docker start <name>`.
 
 ## Updating Docker
 
