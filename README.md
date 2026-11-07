@@ -14,6 +14,10 @@
 
 </div>
 
+## Why
+
+Western Digital doesn't support Docker on My Cloud OS 5, and the community Docker app stopped at Docker 20.10 (its last release was in April 2022). This app brings the current, official Docker to these NAS models and keeps it up to date.
+
 ## Features
 
 - **Official Docker, unmodified**, with `docker compose` included.
