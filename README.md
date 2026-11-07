@@ -50,12 +50,9 @@ Install the newer `.bin` the same way: **Apps > Install an app manually**. Your 
 
 In the dashboard, open the **Docker** app and choose **Uninstall**. Docker's own data (images, containers, Docker volumes, settings and logs) is kept in `/mnt/HD/HD_a2/Nas_Prog/docker_data` until you delete it. Folders you mounted into containers are never touched.
 
-## Good to know
+## More
 
-- Images take more disk space than usual (about 10 GB for ten common images), because the WD kernel lacks overlayfs.
-- There is no web UI. Run [Portainer](https://www.portainer.io/) as a container if you want one.
-
-More: [Troubleshooting](docs/troubleshooting.md) · [How it works](docs/how-it-works.md)
+[Troubleshooting](docs/troubleshooting.md) · [How it works](docs/how-it-works.md)
 
 ## Disclaimer
 
