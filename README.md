@@ -30,9 +30,9 @@ My Cloud OS 3 included an old Docker (1.7), but starting with My Cloud OS 5, Wes
 | Model | Status |
 |---|---|
 | My Cloud PR2100 | ✅ Tested (OS 5.33.102) |
-| My Cloud PR4100 | Should work, not tested yet ([tell us](https://github.com/polius/wd-mycloud-docker/issues)) |
+| My Cloud PR4100 | ✅ Tested (OS 5.33.102) |
 
-Intel models with **My Cloud OS 5** only. ARM models (EX2 Ultra, EX2100, EX4100, Mirror Gen 2) are not supported.
+Intel models with **My Cloud OS 5** only. ARM models (EX2 Ultra, EX2100, EX4100, Mirror Gen 2) are not supported yet: if you'd like support for yours, [open an issue](https://github.com/polius/wd-mycloud-docker/issues).
 
 ## Install
 

@@ -17,6 +17,8 @@ If you run Docker through the older community app (WDCommunity, Docker 20.10), m
    reboot
    ```
 
+   Don't skip the restart: uninstalling does not always stop the old Docker, and the restart cleans up whatever it left running. Without it, the new app can fail with ["another Docker daemon is running"](troubleshooting.md#another-docker-daemon-is-running).
+
 3. **Install this app** ([Install](../README.md#install)).
 
 4. **Recreate your containers:**
