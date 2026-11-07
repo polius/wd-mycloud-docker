@@ -27,4 +27,8 @@ If you run Docker through the older community app (WDCommunity, Docker 20.10), m
 
    Images are pulled again by tag, so `:latest` images may be newer than the ones you had. Check that every container starts (`docker ps -a`); a much newer image may need a changed setting.
 
-Your old Docker data stays untouched in `Nas_Prog/_docker/`. Delete it once everything runs (`rm -rf /mnt/HD/HD_a2/Nas_Prog/_docker`). Portainer, which the old app installed by itself, is left out of the export (`EXCLUDE="" bash export-docker-run.sh` includes it).
+Once everything works, delete the old Docker data to free the space:
+
+```bash
+rm -rf /mnt/HD/HD_a2/Nas_Prog/_docker
+```
