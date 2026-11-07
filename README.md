@@ -16,7 +16,7 @@
 
 ## Why
 
-My Cloud OS 3 included an old Docker (1.7), but starting with My Cloud OS 5, Western Digital removed it. The community Docker app filled the gap, but stopped at Docker 20.10 (its last release was in April 2022). This app brings the current, official Docker to these NAS models and keeps it up to date.
+My Cloud OS 3 included an old Docker (1.7), but starting with My Cloud OS 5, Western Digital removed it. The [community Docker app](https://github.com/WDCommunity/wdpksrc/tree/master/wdpk/docker) filled the gap, but stopped at Docker 20.10 (its [last release](https://github.com/WDCommunity/wdpksrc/releases/tag/docker-v20.10.14) was in April 2022). This app brings the current, official Docker to these NAS models and keeps it up to date.
 
 ## Features
 
