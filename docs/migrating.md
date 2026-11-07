@@ -10,8 +10,6 @@ If you run Docker through the older community app (WDCommunity, Docker 20.10), m
    bash export-docker-run.sh
    ```
 
-   It only reads from Docker, and writes `docker-recreate-<date>.sh` (exact, **contains your containers' secrets**, readable only by root) and a `.redacted.sh` copy you can share. Review it: it notes anything that needs attention, such as data stored in Docker volumes or inside the old app's folder.
-
 2. **Uninstall the old Docker app** in the dashboard. WD leaves its folder behind, and the new app installs into the same place, so remove it and restart the NAS:
 
    ```bash
