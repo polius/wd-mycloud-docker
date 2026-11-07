@@ -1,26 +1,8 @@
 # Troubleshooting
 
-<details>
-<summary>Check what Docker is doing</summary>
+All commands run on the NAS over SSH.
 
-```bash
-bash /mnt/HD/HD_a2/Nas_Prog/docker/dockerctl.sh --status
-tail -n 50 /mnt/HD/HD_a2/Nas_Prog/docker_data/logs/dockerd.log
-tail -n 50 /mnt/HD/HD_a2/Nas_Prog/docker_data/logs/dockerctl.log
-cat /tmp/debug_apkg      # what the NAS ran when installing or starting apps (cleared at reboot)
-```
-
-</details>
-
-<details>
-<summary>"another Docker daemon is running"</summary>
-
-A different Docker (usually the old community app) is still running. Uninstall it in the dashboard, restart the NAS, and the app starts Docker by itself.
-
-</details>
-
-<details>
-<summary>A container did not come back after an update or a reboot</summary>
+## A container did not come back after an update or a reboot
 
 It has no restart policy. Start it and give it one:
 
@@ -29,26 +11,32 @@ docker start <name>
 docker update --restart unless-stopped <name>
 ```
 
-</details>
+## `docker: command not found`
 
-<details>
-<summary><code>docker: command not found</code> over SSH</summary>
-
-The `docker` command links are created at every boot. If they are missing, recreate them:
+The `docker` command is linked in again at every boot. If it is missing, recreate the links:
 
 ```bash
 bash /mnt/HD/HD_a2/Nas_Prog/docker/dockerctl.sh --links
 ```
 
-</details>
+## "another Docker daemon is running"
 
-<details>
-<summary>Restart Docker</summary>
+Another Docker, usually the old community app, is still running. Uninstall it in the dashboard and restart the NAS. Docker then starts by itself.
+
+## Restart Docker
 
 ```bash
 bash /mnt/HD/HD_a2/Nas_Prog/docker/dockerctl.sh --restart
 ```
 
-Over SSH it runs in the background, so it finishes even if your connection drops; follow it with `tail -f /mnt/HD/HD_a2/Nas_Prog/docker_data/logs/dockerctl.log`.
+It keeps running even if your SSH connection drops.
 
-</details>
+## See what Docker is doing
+
+```bash
+bash /mnt/HD/HD_a2/Nas_Prog/docker/dockerctl.sh --status
+tail -n 50 /mnt/HD/HD_a2/Nas_Prog/docker_data/logs/dockerd.log
+tail -n 50 /mnt/HD/HD_a2/Nas_Prog/docker_data/logs/dockerctl.log
+```
+
+If the app fails to install or start, `cat /tmp/debug_apkg` shows what the NAS ran (it is cleared at reboot).
