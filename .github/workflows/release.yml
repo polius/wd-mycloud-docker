@@ -27,8 +27,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # mksapkg model names, one .bin each. Intel (x86_64) OS5 models only.
-  MODELS: "MyCloudPR2100 MyCloudPR4100"
+  # mksapkg model names, one .bin each (make-app.sh's model_arch says which engine each gets),
+  # and the engine architectures they need: a version is built only once Docker has
+  # published it for all of them.
+  MODELS: "MyCloudPR2100 MyCloudPR4100 MyCloudEX2Ultra WDMyCloudEX2100 WDMyCloudEX4100 WDMyCloudMirror"
+  ENGINE_ARCHES: "x86_64 armhf"
 
 jobs:
   release:
@@ -45,15 +48,19 @@ jobs:
           REPLACE: ${{ inputs.replace }}
         run: |
           set -euo pipefail
-          url=https://download.docker.com/linux/static/stable/x86_64/
+          url=https://download.docker.com/linux/static/stable
           vsort() { sort -u -t. -k1,1n -k2,2n -k3,3n; }
-          all=$(curl -fsSL --retry 3 "$url" | grep -o 'docker-[0-9]*\.[0-9]*\.[0-9]*\.tgz' \
-                | sed 's/^docker-//; s/\.tgz$//' | vsort)
+          # versions published for every arch in ENGINE_ARCHES
+          read -r -a arches <<<"$ENGINE_ARCHES"
+          all=$(for a in "${arches[@]}"; do
+                  curl -fsSL --retry 3 "$url/$a/" | grep -o 'docker-[0-9]*\.[0-9]*\.[0-9]*\.tgz' \
+                    | sed 's/^docker-//; s/\.tgz$//' | sort -u
+                done | sort | uniq -c | awk -v n=${#arches[@]} '$1 == n { print $2 }' | vsort)
           newest=$(tail -n1 <<<"$all")
           version=${INPUT_VERSION:-$newest}
 
           [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::no valid Docker version ('$version')"; exit 1; }
-          grep -qx "$version" <<<"$all" || { echo "::error::Docker $version is not published at $url"; exit 1; }
+          grep -qx "$version" <<<"$all" || { echo "::error::Docker $version is not published at $url for all of: $ENGINE_ARCHES"; exit 1; }
 
           build=true; exists=false
           if gh release view "v$version" >/dev/null 2>&1; then
