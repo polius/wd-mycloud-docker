@@ -27,14 +27,14 @@ My Cloud OS 3 included an old Docker (1.7), but starting with My Cloud OS 5, Wes
 
 ## Supported models
 
-| Model | Status |
-|---|---|
-| My Cloud PR2100 | ✅ Tested and working (OS 5.33.102) |
-| My Cloud PR4100 | ✅ Tested and working (OS 5.33.102) |
-| My Cloud EX2 Ultra | 🧪 Untested: looking for users to confirm it works ([issue #7](https://github.com/polius/wd-mycloud-docker/issues/7)) |
-| My Cloud EX2100 | 🧪 Untested: looking for users to confirm it works ([open an issue](https://github.com/polius/wd-mycloud-docker/issues)) |
-| My Cloud EX4100 | 🧪 Untested: looking for users to confirm it works ([open an issue](https://github.com/polius/wd-mycloud-docker/issues)) |
-| My Cloud Mirror Gen 2 | 🧪 Untested: looking for users to confirm it works ([open an issue](https://github.com/polius/wd-mycloud-docker/issues)) |
+| Model | Status | Last tested OS version |
+|---|---|---|
+| My Cloud PR2100 | ✅ Tested and working | 5.33.103 |
+| My Cloud PR4100 | ✅ Tested and working | 5.33.102 |
+| My Cloud EX2 Ultra | 🧪 Untested: looking for users to confirm it works ([issue #7](https://github.com/polius/wd-mycloud-docker/issues/7)) | — |
+| My Cloud EX2100 | 🧪 Untested: looking for users to confirm it works ([open an issue](https://github.com/polius/wd-mycloud-docker/issues)) | — |
+| My Cloud EX4100 | 🧪 Untested: looking for users to confirm it works ([open an issue](https://github.com/polius/wd-mycloud-docker/issues)) | — |
+| My Cloud Mirror Gen 2 | 🧪 Untested: looking for users to confirm it works ([open an issue](https://github.com/polius/wd-mycloud-docker/issues)) | — |
 
 Models with **My Cloud OS 5** only.
 
