@@ -18,12 +18,22 @@ The app keeps the Docker program and your data apart, the same way WD's own Plex
 
 ## Limitations of the WD firmware
 
-- **Disk usage**: the WD kernel has no overlayfs, so Docker uses the `vfs` storage driver, which stores every image layer as a full copy. Images take several times more disk space than on a typical Linux machine (about 10 GB for ten common images).
+- **Disk usage and container creation**: the WD kernel has no overlayfs, so Docker uses the `vfs` storage driver, which stores every image layer as a full copy. Images take several times more disk space than on a typical Linux machine (about 10 GB for ten common images), and creating a container (`docker run`, or recreating it after an image update) copies the whole image first, so it takes longer. Starting a container that already exists, as at every reboot and update, copies nothing. See [Why not overlayfs?](#why-not-overlayfs)
 - **File capabilities**: the data volume can't store `security.*` extended attributes, so Docker drops them from image files (`vfs.xattrs=i_want_broken_containers`, as Docker 20.10 did without asking). Without this, pulling images like `louislam/uptime-kuma` fails. A container that runs as a normal user and relies on a file capability (for example to open a port below 1024) fails when it starts. `docker info` warns about this setup.
 - **cgroup v1**: the WD kernel (4.14) only has cgroup v1. Docker 29 supports it, but has announced its removal by May 2029. Releases follow new Docker versions automatically, new major versions included, so check the release notes before installing a new major.
 - **Container port isolation**: the kernel has no iptables `raw` table, so Docker runs with `DOCKER_INSECURE_NO_IPTABLES_RAW=1`. This drops a hardening rule that blocks other hosts on your LAN from reaching container ports directly through routing; ports you publish with `-p` work as usual.
 - **IPv6**: container IPv6 NAT is off (`"ip6tables": false`), because the kernel lacks `ip6table_nat`.
 - **No bundled UI**: unlike the community app, Portainer is not installed. Run it as a container if you want it.
+
+### Why not overlayfs?
+
+Docker itself already supports overlayfs; it's the WD kernel that lacks it, so no change to Docker can add it. The app would have to ship its own `overlay.ko` kernel module, and it doesn't, on purpose:
+
+- **A kernel module only works with the exact kernel it was built for.** After a firmware update with a new kernel, the module would either be refused, so Docker couldn't start until a matching module was published, or, if the kernel doesn't check, load and possibly crash the NAS.
+- **WD's GPL downloads don't include the My Cloud OS 5 kernel source** (only the older 2.x firmware), so the module couldn't be built from WD's own kernel.
+- **Existing installs would lose sight of their containers**: images and containers made with `vfs` aren't visible with overlayfs, so switching means recreating them.
+
+This is worth revisiting if a future firmware includes overlayfs, if WD publishes the OS 5 kernel source, or if a well-maintained module for it appears.
 
 ## Inside the app
 
