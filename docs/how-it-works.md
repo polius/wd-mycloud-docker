@@ -19,7 +19,7 @@ The app keeps the Docker program and your data apart, the same way WD's own Plex
 ## Limitations of the WD firmware
 
 - **Disk usage and container creation**: the WD kernel has no overlayfs, so Docker uses the `vfs` storage driver, which stores every image layer as a full copy. Images take several times more disk space than on a typical Linux machine (about 10 GB for ten common images), and creating a container (`docker run`, or recreating it after an image update) copies the whole image first, so it takes longer. Starting a container that already exists, as at every reboot and update, copies nothing. See [Why not overlayfs?](#why-not-overlayfs)
-- **File capabilities**: the data volume can't store `security.*` extended attributes, so Docker drops them from image files (`vfs.xattrs=i_want_broken_containers`, as Docker 20.10 did without asking). Without this, pulling images like `louislam/uptime-kuma` fails. A container that runs as a normal user and relies on a file capability (for example to open a port below 1024) fails when it starts. `docker info` warns about this setup.
+- **File capabilities**: the data volume can't store `security.*` extended attributes, so Docker drops them from image files (`vfs.xattrs=i_want_broken_containers`, as Docker 20.10 did without asking). Without this, pulling images like `louislam/uptime-kuma` fails. The usual reasons for those attributes, a normal user pinging or opening a port below 1024, still work: Docker allows both in containers by default (not with `--network host`). A program that needs another capability from its file fails when it starts, and setting one (`setcap`, in a container or a `docker build`) fails with "Not supported". `docker info` warns about this setup.
 - **cgroup v1**: the WD kernel (4.14) only has cgroup v1. Docker 29 supports it, but has announced its removal by May 2029. Releases follow new Docker versions automatically, new major versions included, so check the release notes before installing a new major.
 - **Container port isolation**: the kernel has no iptables `raw` table, so Docker runs with `DOCKER_INSECURE_NO_IPTABLES_RAW=1`. This drops a hardening rule that blocks other hosts on your LAN from reaching container ports directly through routing; ports you publish with `-p` work as usual.
 - **IPv6**: container IPv6 NAT is off (`"ip6tables": false`), because the kernel lacks `ip6table_nat`.
@@ -34,6 +34,22 @@ Docker itself already supports overlayfs; it's the WD kernel that lacks it, so n
 - **Existing installs would lose sight of their containers**: images and containers made with `vfs` aren't visible with overlayfs, so switching means recreating them.
 
 This is worth revisiting if a future firmware includes overlayfs, if WD publishes the OS 5 kernel source, or if a well-maintained module for it appears.
+
+## What works in containers
+
+Checked on a PR2100:
+
+| Feature | On this NAS |
+|---|---|
+| Memory and swap limits (`--memory`, `--memory-swap`) | ✅ Work |
+| Disk speed limits (`--device-read-bps`, `--device-write-iops`, …) | ❌ The kernel has no blkio throttling |
+| Hardware video transcoding (Plex, Jellyfin) | ✅ The Intel GPU is available as `/dev/dri`: pass `--device /dev/dri` |
+| VPN containers that use tun (OpenVPN, Tailscale, Gluetun) | ✅ Work: pass `--device /dev/net/tun --cap-add NET_ADMIN` |
+| WireGuard in the kernel | ❌ Not in kernel 4.14: use an image that runs WireGuard in userspace (over `/dev/net/tun`) |
+| macvlan networks (a container with its own address on your LAN) | ✅ Work: the NAS's network interface is `bond0` (`-o parent=bond0`) |
+| A normal user opening a port below 1024, or pinging | ✅ Work (Docker's defaults), except with `--network host` |
+| `setcap` in a container or a `docker build` | ❌ Fails with "Not supported": see [Troubleshooting](troubleshooting.md#setcap-fails-with-not-supported) |
+| ARM-only images | ❌ These models are x86_64: they fail with `exec format error` |
 
 ## Inside the app
 
