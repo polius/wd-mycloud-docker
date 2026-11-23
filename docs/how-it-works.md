@@ -1,6 +1,6 @@
 # How it works
 
-Technical details for the curious: where your data lives, what the WD firmware lacks, how the package is built and how to verify it.
+Technical details for the curious: where your data lives, what the WD firmware lacks, how the ARM models run current images, how the package is built and how to verify it.
 
 ## Where your data lives
 
@@ -35,6 +35,34 @@ Docker itself already supports overlayfs; it's the WD kernel that lacks it, so n
 
 This is worth revisiting if a future firmware includes overlayfs, if WD publishes the OS 5 kernel source, or if a well-maintained module for it appears.
 
+## ARM models: memory page size
+
+The EX2 Ultra's kernel uses **32 KB memory pages** (`getconf PAGESIZE` prints `32768`; the Intel models use the usual 4 KB). A program is loaded into memory one page at a time, so the parts of the program file must line up with the page size. Most current ARM images are built for 4 KB pages: Alpine 3.18 and later, Debian 12 (bookworm), Ubuntu 24.04, and everything built on them, such as `nginx:alpine`. On this kernel their programs don't start: the container exits with code 139 (a crash), or with `error while loading shared libraries: ... ELF load command address/offset not page-aligned`. Older images (Alpine 3.17, Debian 11, Ubuntu 22.04) and programs written in Go are built for 64 KB and run as they are. Debian 13 (trixie) and Ubuntu 26.04 mostly do too, but still have a few libraries built for 4 KB, such as zlib.
+
+The ARM app fixes this when a container starts, with **pagefix** (from this project, in [`pagefix/`](../pagefix)). It re-lays out each program file that can't load, so that it can: no instruction or address in it changes, only where its parts are placed in the file, and every rewrite is checked before it replaces the file. It works on the container's own copy of the image (with `vfs`, every container has one), so the image itself and other containers aren't changed. Files that already load are not touched. The first start of a new container checks all its files (a few seconds to minutes, depending on the image); later starts only check files changed since.
+
+How it runs: in the ARM app, `engine/runc` is pagefix, and Docker's own `runc` is next to it as `engine/runc.real`, unmodified. Docker runs `runc` for everything a container does; pagefix passes every call straight to `runc.real`, and before a container starts it first fixes the container's files. It writes no logs, and a file it can't fix never stops a container from starting. It does nothing on a kernel with 4 KB pages.
+
+What it costs, in the fixed files only:
+
+- **Less hardening**: each fixed program has one memory page that is both writable and executable, and loses its read-only relocations (RELRO). Both make some memory-corruption bugs easier to exploit; neither changes what the program does.
+- **Changed files**: package checkers (`apk audit`, `debsums`) and image scanners report the fixed files as modified.
+
+What it can't fix:
+
+- **Packages installed in a running container** (`apk add`, `apt-get install`) don't start until the container starts again: `docker restart <name>`.
+- **Programs on volumes and mounted folders** are never touched.
+- **Programs that assume 4 KB pages while running** can still fail. Rare; Node.js, for example, works but prints `pthread_create: Invalid argument` for one thread.
+- **`docker build`**: each `RUN` step is fixed before it runs, but a program installed in a `RUN` step can't run in that same step: run it in the next one (`RUN apk add curl` then `RUN curl ...`, not `RUN apk add curl && curl ...`). This is with the builder the app comes with; with BuildKit (if you add the `buildx` plugin), `RUN` steps aren't fixed at all.
+
+To see what in a container can't load, and whether pagefix can fix it:
+
+```bash
+bash /mnt/HD/HD_a2/Nas_Prog/docker/dockerctl.sh --pagefix-check <container>
+```
+
+To turn it off: `PAGEFIX=0` in `/mnt/HD/HD_a2/Nas_Prog/docker_data/dockerctl.conf`, then restart Docker. For one container only: `docker run -e PAGEFIX=0 ...`.
+
 ## What works in containers
 
 Checked on a PR2100:
@@ -49,7 +77,7 @@ Checked on a PR2100:
 | macvlan networks (a container with its own address on your LAN) | ✅ Work: the NAS's network interface is `bond0` (`-o parent=bond0`) |
 | A normal user opening a port below 1024, or pinging | ✅ Work (Docker's defaults), except with `--network host` |
 | `setcap` in a container or a `docker build` | ❌ Fails with "Not supported": see [Troubleshooting](troubleshooting.md#setcap-fails-with-not-supported) |
-| ARM-only images | ❌ These models are x86_64: they fail with `exec format error` |
+| ARM-only images | ❌ The PR2100 and PR4100 are x86_64: they fail with `exec format error` |
 
 ## Inside the app
 
@@ -57,7 +85,7 @@ The `.bin` is a standard My Cloud OS5 app package, built with WD's `mksapkg-OS5`
 
 | Part | What it does |
 |---|---|
-| `engine/` | Docker's official static binaries (`dockerd`, `containerd`, `runc`, `docker`, …) and the `docker compose` plugin |
+| `engine/` | Docker's official static binaries (`dockerd`, `containerd`, `runc`, `docker`, …) and the `docker compose` plugin. ARM models also have pagefix as `engine/runc`, with Docker's `runc` as `engine/runc.real` ([why](#arm-models-memory-page-size)) |
 | `dockerctl.sh` | Starts and stops Docker: loads the network kernel modules, mounts the cgroup controllers, mounts `/dev/pts`, links `docker` into `/sbin`, writes `daemon.json` on first start, starts `dockerd` and stops it gracefully |
 | `init.sh`, `start.sh`, `stop.sh` | Run by the NAS at boot and shutdown, and during install, update and uninstall; each calls `dockerctl.sh` |
 | `install.sh`, `remove.sh` | Copy the app into `Nas_Prog/docker` / remove it again. Never touch `Nas_Prog/docker_data` |
@@ -83,7 +111,7 @@ Releases are built by [GitHub Actions](../.github/workflows/release.yml), but yo
 
 ```bash
 git clone https://github.com/polius/wd-mycloud-docker.git && cd wd-mycloud-docker
-mkdir app-build && cp make-app.sh dockerctl.sh app-build/
+mkdir app-build && cp -r make-app.sh dockerctl.sh pagefix app-build/
 docker run --rm --platform linux/amd64 -v "$PWD/app-build:/out" debian:bookworm-slim bash -c '
   apt-get update -qq &&
   apt-get install -y -qq --no-install-recommends curl ca-certificates openssl libxml2 >/dev/null &&
@@ -92,7 +120,7 @@ docker run --rm --platform linux/amd64 -v "$PWD/app-build:/out" debian:bookworm-
 
 The build runs in a throwaway container that can only write to `app-build/`. Pass a version to build a specific one (`bash /out/make-app.sh 29.9.3`), and `-e MODELS="MyCloudPR2100"` to build only some models. It produces one `.bin` per model, `SHA256SUMS` and `release-notes.md`.
 
-`make-app.sh` downloads WD's packaging tool from the [WDCommunity](https://github.com/WDCommunity/wdpksrc) project at a pinned commit and refuses to run it unless its SHA-256 matches.
+`make-app.sh` downloads WD's packaging tool from the [WDCommunity](https://github.com/WDCommunity/wdpksrc) project at a pinned commit and refuses to run it unless its SHA-256 matches. For the ARM models it also downloads the official Go release named in `make-app.sh` (checked the same way), runs pagefix's tests, builds it, and stops if any program in the ARM engine wouldn't load with 32 KB pages.
 
 ## Verifying a release
 
@@ -103,7 +131,7 @@ sha256sum -c SHA256SUMS        # Linux
 shasum -a 256 -c SHA256SUMS    # macOS
 ```
 
-The release notes also list the SHA-256 of Docker's official `docker-<version>.tgz`, so you can check that the engine inside the app is Docker's own, byte for byte.
+The release notes also list the SHA-256 of Docker's official `docker-<version>.tgz`, so you can check that the engine inside the app is Docker's own, byte for byte (on the ARM models, Docker's `runc` is `engine/runc.real`; the release notes give pagefix's SHA-256).
 
 ## How releases are made
 

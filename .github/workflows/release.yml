@@ -91,7 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir app-build
-          cp make-app.sh dockerctl.sh app-build/
+          cp -r make-app.sh dockerctl.sh pagefix app-build/
           # Same throwaway container as for a local build: it only sees app-build/.
           docker run --rm --platform linux/amd64 -e MODELS -v "$PWD/app-build:/out" debian:bookworm-slim \
             bash -c 'apt-get update -qq &&
