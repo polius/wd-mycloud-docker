@@ -39,7 +39,7 @@ On an older build, add this line to `/mnt/HD/HD_a2/Nas_Prog/docker_data/daemon.j
 "storage-opts": ["vfs.xattrs=i_want_broken_containers"],
 ```
 
-The cost: the attributes are dropped from every image, and the NAS can't store them anyway. Most containers don't need them: the usual reason, letting a normal user ping or open a port below 1024, is allowed in containers anyway (not with `--network host`). A program that needs another capability from its file fails when it starts instead of when you pull it. `docker info` also shows a warning that this setup is unsupported. To have pulls fail instead, put `DROP_XATTRS=0` in `/mnt/HD/HD_a2/Nas_Prog/docker_data/dockerctl.conf` and restart Docker.
+The cost: the attributes are dropped from every image, and the NAS can't store them anyway. Most containers don't need them: the usual reason, letting a normal user ping or open a port below 1024, is allowed in containers anyway (not with `--network host`). A program that needs another capability from its file fails when it starts instead of when you pull it. `docker info` also warns that extended file attributes from images are discarded. To have pulls fail instead, put `DROP_XATTRS=0` in `/mnt/HD/HD_a2/Nas_Prog/docker_data/dockerctl.conf` and restart Docker.
 
 ## `setcap` fails with "Not supported"
 
