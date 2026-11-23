@@ -21,7 +21,8 @@
 #
 # What goes into the app:
 #   engine/          official static binaries from download.docker.com (docker-<VERSION>.tgz)
-#                    + the latest docker compose plugin from GitHub (sha256 checked)
+#                    + the latest docker compose plugin from GitHub (sha256 checked),
+#                    for the model's CPU: x86_64 (Intel models) or armhf (ARM models)
 #   dockerctl.sh     starts/stops the engine (see its header)
 #   init.sh, start.sh, stop.sh, install.sh, remove.sh, ...   the NAS app hooks
 #
@@ -44,10 +45,10 @@ set -u -o pipefail
 
 # ---------------------------------------------------------------- settings
 APP_NAME=docker
-# mksapkg model names (space separated); one .bin per model. Intel (x86_64) OS5 models only:
-# the engine is x86_64. PR2100 tested; PR4100 is the same family and firmware.
-read -r -a MODELS <<<"${MODELS:-MyCloudPR2100 MyCloudPR4100}"
-STATIC_URL=https://download.docker.com/linux/static/stable/x86_64
+# mksapkg model names (space separated); one .bin per model. model_arch below says which
+# engine each one gets. PR2100 and PR4100 tested; the ARM models not yet (model_note).
+read -r -a MODELS <<<"${MODELS:-MyCloudPR2100 MyCloudPR4100 MyCloudEX2Ultra WDMyCloudEX2100 WDMyCloudEX4100 WDMyCloudMirror}"
+STATIC_URL=https://download.docker.com/linux/static/stable   # + /<arch>/docker-<VERSION>.tgz
 COMPOSE_URL=https://github.com/docker/compose/releases
 MKSAPKG_URL=https://raw.githubusercontent.com/WDCommunity/wdpksrc/f7a6c485b6285c342727006507f79bf5e4d119f0/mksapkg-OS5
 MKSAPKG_SHA256=62340b1d0eb0433fffa7ceb1a5b6d4886e69b93e6e60297b2f984f5f3557e67a
@@ -69,43 +70,79 @@ sha256_of() {
 }
 b64_decode() { openssl base64 -d -A; }
 
-# latest stable static Docker release
+# Which engine a model gets: Docker's name for the CPU (a folder of $STATIC_URL), the
+# docker compose download name, and the ELF machine number of its binaries.
+model_arch() {
+  case $1 in
+    MyCloudPR2100|MyCloudPR4100) echo x86_64 ;;   # Intel Pentium N3710 / Celeron N3160
+    MyCloudEX2Ultra|WDMyCloudEX2100|WDMyCloudMirror)   # Mirror = Mirror Gen 2 on OS5
+                                 echo armhf ;;    # Marvell Armada 385 (ARMv7, VFPv3, NEON)
+    WDMyCloudEX4100)             echo armhf ;;    # Marvell Armada 388 (same, faster)
+    *) return 1 ;;
+  esac
+}
+# shown next to the model in the release notes
+model_note() {
+  case $1 in
+    MyCloudEX2Ultra) echo " (untested: [please report](https://github.com/polius/wd-mycloud-docker/issues/7) if it works)" ;;
+    WDMyCloudEX2100|WDMyCloudEX4100|WDMyCloudMirror)
+                     echo " (untested: [please report](https://github.com/polius/wd-mycloud-docker/issues) if it works)" ;;
+  esac
+}
+compose_arch() { case $1 in x86_64) echo x86_64 ;; armhf) echo armv7 ;; esac; }
+elf_machine()  { case $1 in x86_64) echo 62 ;; armhf) echo 40 ;; esac; }
+
+# e_machine of an ELF file (bytes 18-19, little-endian), as a number
+elf_machine_of() { od -An -tu2 -j18 -N2 "$1" 2>/dev/null | tr -d ' '; }
+
+# latest stable static Docker release published for every arch in ARCHES
 latest_engine_version() {
-  curl -fsSL "$STATIC_URL/" \
-    | grep -o 'docker-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.tgz' \
-    | sed 's/^docker-//; s/\.tgz$//' \
+  local a
+  for a in "${ARCHES[@]}"; do
+    curl -fsSL "$STATIC_URL/$a/" \
+      | grep -o 'docker-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.tgz' \
+      | sed 's/^docker-//; s/\.tgz$//' | sort -u
+  done \
+    | sort | uniq -c | awk -v n=${#ARCHES[@]} '$1 == n { print $2 }' \
     | awk -F. '{ printf "%05d%05d%05d %s\n", $1, $2, $3, $0 }' \
     | sort -n | tail -n 1 | cut -d' ' -f2
 }
 
 # ---------------------------------------------------------------- engine
-fetch_engine() {   # fetch_engine <version> <app folder>: engine/ with docker + compose
-  local v=$1 app=$2 dl=$WORK/download got tag url want have
+fetch_engine() {   # fetch_engine <version> <arch> <app folder>: engine/ with docker + compose
+  local v=$1 arch=$2 app=$3 dl=$WORK/$2/download got f ca want have
   mkdir -p "$dl" || die "cannot create $dl"
-  log "downloading $STATIC_URL/docker-$v.tgz"
-  curl -fsSL --retry 3 -o "$dl/docker-$v.tgz" "$STATIC_URL/docker-$v.tgz" || die "download of docker-$v.tgz failed"
+  log "downloading $STATIC_URL/$arch/docker-$v.tgz"
+  curl -fsSL --retry 3 -o "$dl/docker-$v.tgz" "$STATIC_URL/$arch/docker-$v.tgz" || die "download of $arch docker-$v.tgz failed"
   ENGINE_SHA256=$(sha256_of "$dl/docker-$v.tgz")
-  log "docker-$v.tgz sha256 $ENGINE_SHA256"
+  log "$arch docker-$v.tgz sha256 $ENGINE_SHA256"
   tar -xzf "$dl/docker-$v.tgz" -C "$dl" || die "cannot unpack docker-$v.tgz"
   [[ -x $dl/docker/dockerd && -x $dl/docker/docker ]] || die "unexpected archive layout in docker-$v.tgz"
-  got=$("$dl/docker/dockerd" --version 2>&1)
-  [[ $got == *"version $v,"* ]] || die "dockerd reports '$got' (expected $v)"
+  for f in "$dl"/docker/*; do
+    [[ $(elf_machine_of "$f") == "$(elf_machine "$arch")" ]] || die "${f##*/} in $arch docker-$v.tgz is not an $arch program"
+  done
+  if [[ $arch == "$(uname -m)" ]]; then
+    got=$("$dl/docker/dockerd" --version 2>&1)
+    [[ $got == *"version $v,"* ]] || die "dockerd reports '$got' (expected $v)"
+  else
+    # can't run it here: its version string must at least be in it
+    grep -aqF "$v" "$dl/docker/dockerd" || die "$arch dockerd does not contain the version $v"
+  fi
   cp -a "$dl/docker" "$app/engine" || die "cannot copy the engine into $app"
 
-  url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$COMPOSE_URL/latest") || die "cannot reach GitHub"
-  tag=${url##*/}
-  [[ $tag == v[0-9]* ]] || die "cannot find the latest docker compose version ($url)"
-  log "downloading docker compose $tag"
-  curl -fsSL --retry 3 -o "$dl/docker-compose" "$COMPOSE_URL/download/$tag/docker-compose-linux-x86_64" \
-    && curl -fsSL --retry 3 -o "$dl/docker-compose.sha256" "$COMPOSE_URL/download/$tag/docker-compose-linux-x86_64.sha256" \
+  ca=$(compose_arch "$arch")
+  log "downloading docker compose v$COMPOSE_VERSION ($ca)"
+  curl -fsSL --retry 3 -o "$dl/docker-compose" "$COMPOSE_URL/download/v$COMPOSE_VERSION/docker-compose-linux-$ca" \
+    && curl -fsSL --retry 3 -o "$dl/docker-compose.sha256" "$COMPOSE_URL/download/v$COMPOSE_VERSION/docker-compose-linux-$ca.sha256" \
     || die "docker compose download failed"
   want=$(awk '{ print $1 }' "$dl/docker-compose.sha256"); have=$(sha256_of "$dl/docker-compose")
   [[ -n $want && $want == "$have" ]] || die "docker compose checksum mismatch"
+  [[ $(elf_machine_of "$dl/docker-compose") == "$(elf_machine "$arch")" ]] || die "docker-compose-linux-$ca is not an $arch program"
   cp "$dl/docker-compose" "$app/engine/docker-compose" && chmod 755 "$app/engine/docker-compose" \
     || die "cannot copy docker compose into $app"
-  COMPOSE_VERSION=${tag#v}
   COMPOSE_SHA256=$have
-  log "docker compose $COMPOSE_VERSION ready (sha256 $have)"
+  INPUT_ROWS+="| $arch | \`docker-$v.tgz\` \`$ENGINE_SHA256\` | \`docker-compose-linux-$ca\` \`$COMPOSE_SHA256\` |"$'\n'
+  log "docker compose $COMPOSE_VERSION ($ca) ready (sha256 $have)"
 }
 
 # ---------------------------------------------------------------- app files
@@ -236,7 +273,7 @@ table{border-collapse:collapse;width:100%} td{padding:.35rem .5rem;border-bottom
 
 <h2>What is installed</h2>
 <table>
-<tr><td>Docker Engine</td><td>$v: Docker's official static binaries from <code>download.docker.com</code>, unmodified.<br><small>sha256 of docker-$v.tgz: <code>$ENGINE_SHA256</code></small></td></tr>
+<tr><td>Docker Engine</td><td>$v ($ARCH): Docker's official static binaries from <code>download.docker.com</code>, unmodified.<br><small>sha256 of docker-$v.tgz: <code>$ENGINE_SHA256</code></small></td></tr>
 <tr><td>docker compose</td><td>$COMPOSE_VERSION: Docker's official plugin from <code>github.com/docker/compose</code>, checksum verified.<br><small>sha256: <code>$COMPOSE_SHA256</code></small></td></tr>
 </table>
 
@@ -294,11 +331,18 @@ for t in curl tar openssl; do
   command -v "$t" >/dev/null 2>&1 || die "'$t' is needed to build the app"
 done
 [[ -f $OUT/dockerctl.sh ]] || die "dockerctl.sh must be next to make-app.sh ($OUT)"
+(( ${#MODELS[@]} )) || die "MODELS is empty"
+# the engine architectures needed, in order of first use
+ARCHES=()
+for m in "${MODELS[@]}"; do
+  a=$(model_arch "$m") || die "unknown model '$m' (known: see model_arch in $SELF)"
+  [[ " ${ARCHES[*]} " == *" $a "* ]] || ARCHES+=("$a")
+done
 
 VERSION=${1:-}
 if [[ -z $VERSION ]]; then
   VERSION=$(latest_engine_version) || true
-  [[ -n $VERSION ]] || die "cannot find the latest Docker version at $STATIC_URL"
+  [[ -n $VERSION ]] || die "cannot find the latest Docker version at $STATIC_URL (for ${ARCHES[*]})"
   log "latest stable Docker: $VERSION"
 fi
 [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid version '$VERSION' (expected e.g. 29.9.3)"
@@ -309,7 +353,7 @@ WORK=$OUT/${APP_NAME}-build
 for f in "${MODELS[@]/%/_${APP_NAME}_${VERSION}.bin}" SHA256SUMS release-notes.md; do
   [[ -e $OUT/$f ]] && die "$OUT/$f already exists: delete it by hand first"
 done
-mkdir "$WORK" && mkdir "$WORK/tools" "$WORK/pkg" || die "cannot create $WORK"
+mkdir "$WORK" && mkdir "$WORK/tools" || die "cannot create $WORK"
 
 # mksapkg signs the app with  echo <name> | openssl bf-cbc -md sha256 -out apkg.sign -k <key>.
 # OpenSSL 3 keeps Blowfish in its "legacy" provider, which is off by default; without it
@@ -325,39 +369,48 @@ if ! bf_ok; then
   log "OpenSSL 3: legacy provider turned on for this build (mksapkg signs with Blowfish)"
 fi
 
-APP=$WORK/pkg/$APP_NAME
-mkdir "$APP" || die "cannot create $APP"
-ENGINE_SHA256=""; COMPOSE_VERSION=""; COMPOSE_SHA256=""; BIN_ROWS=""
-fetch_engine "$VERSION" "$APP"
-( write_app_files "$APP" "$VERSION" ) || die "cannot write the app files (build folder kept: $WORK)"
+ENGINE_SHA256=""; COMPOSE_SHA256=""; BIN_ROWS=""; INPUT_ROWS=""
+url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$COMPOSE_URL/latest") || die "cannot reach GitHub"
+COMPOSE_VERSION=${url##*/v}
+[[ $COMPOSE_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "cannot find the latest docker compose version ($url)"
 TOOL=$(get_mksapkg "$WORK/tools") || die "cannot get mksapkg-OS5 (build folder kept: $WORK)"
 
-for m in "${MODELS[@]}"; do
-  OUTLOG=$WORK/mksapkg-$m.out
-  if ! ( cd "$APP" && "$TOOL" -E -s -m "$m" ) >"$OUTLOG" 2>&1; then
-    cat "$OUTLOG" >&2
-    die "mksapkg failed for $m (build folder kept: $WORK)"
-  fi
-  # mksapkg exits 0 even when a step fails: check its output and the signature ourselves
-  if grep -qi 'error' "$OUTLOG"; then
-    cat "$OUTLOG" >&2
-    die "mksapkg reported an error for $m (log: $OUTLOG; build folder kept: $WORK)"
-  fi
-  SIGN_SIZE=$(wc -c <"$APP/apkg.sign" 2>/dev/null || echo 0)
-  (( SIGN_SIZE > 16 )) || die "apkg.sign is $SIGN_SIZE bytes: the app was not signed (build folder kept: $WORK)"
-  BUILT=$(ls -1 "$WORK/pkg/${m}_${APP_NAME}_${VERSION}.bin"* 2>/dev/null | head -n1)
-  [[ -n $BUILT ]] || { cat "$OUTLOG" >&2; die "mksapkg did not produce a .bin for $m (build folder kept: $WORK)"; }
-  BIN=$OUT/${m}_${APP_NAME}_${VERSION}.bin
-  cp "$BUILT" "$BIN" || die "cannot copy $BUILT to $BIN"
-  BIN_SHA=$(sha256_of "$BIN")
-  printf '%s  %s\n' "$BIN_SHA" "${BIN##*/}" >>"$OUT/SHA256SUMS"
-  BIN_ROWS+="| \`${BIN##*/}\` | ${m#MyCloud} | $(( $(wc -c <"$BIN") / 1000000 )) MB | \`$BIN_SHA\` |"$'\n'
-  log "built $BIN ($(wc -c <"$BIN") bytes, sha256 $BIN_SHA)"
+# one app folder per engine architecture, packaged for each model that uses it
+for ARCH in "${ARCHES[@]}"; do
+  PKG=$WORK/$ARCH/pkg
+  APP=$PKG/$APP_NAME
+  mkdir -p "$APP" || die "cannot create $APP"
+  fetch_engine "$VERSION" "$ARCH" "$APP"
+  ( write_app_files "$APP" "$VERSION" ) || die "cannot write the app files (build folder kept: $WORK)"
+
+  for m in "${MODELS[@]}"; do
+    [[ $(model_arch "$m") == "$ARCH" ]] || continue
+    OUTLOG=$WORK/mksapkg-$m.out
+    if ! ( cd "$APP" && "$TOOL" -E -s -m "$m" ) >"$OUTLOG" 2>&1; then
+      cat "$OUTLOG" >&2
+      die "mksapkg failed for $m (build folder kept: $WORK)"
+    fi
+    # mksapkg exits 0 even when a step fails: check its output and the signature ourselves
+    if grep -qi 'error' "$OUTLOG"; then
+      cat "$OUTLOG" >&2
+      die "mksapkg reported an error for $m (log: $OUTLOG; build folder kept: $WORK)"
+    fi
+    SIGN_SIZE=$(wc -c <"$APP/apkg.sign" 2>/dev/null || echo 0)
+    (( SIGN_SIZE > 16 )) || die "apkg.sign is $SIGN_SIZE bytes: the app was not signed (build folder kept: $WORK)"
+    BUILT=$(ls -1 "$PKG/${m}_${APP_NAME}_${VERSION}.bin"* 2>/dev/null | head -n1)
+    [[ -n $BUILT ]] || { cat "$OUTLOG" >&2; die "mksapkg did not produce a .bin for $m (build folder kept: $WORK)"; }
+    BIN=$OUT/${m}_${APP_NAME}_${VERSION}.bin
+    cp "$BUILT" "$BIN" || die "cannot copy $BUILT to $BIN"
+    BIN_SHA=$(sha256_of "$BIN")
+    printf '%s  %s\n' "$BIN_SHA" "${BIN##*/}" >>"$OUT/SHA256SUMS"
+    BIN_ROWS+="| \`${BIN##*/}\` | $(m=${m#WD}; echo "${m#MyCloud}")$(model_note "$m") | $ARCH | $(( $(wc -c <"$BIN") / 1000000 )) MB | \`$BIN_SHA\` |"$'\n'
+    log "built $BIN ($ARCH, $(wc -c <"$BIN") bytes, sha256 $BIN_SHA)"
+  done
 done
 
 # Release notes (used by the GitHub release; handy for a local build too)
 cat >"$OUT/release-notes.md" <<EOF
-Docker Engine **$VERSION** packaged as an app for WD My Cloud OS5 (Intel models).
+Docker Engine **$VERSION** packaged as an app for WD My Cloud OS5.
 
 | Component | Version | Source |
 |---|---|---|
@@ -373,12 +426,16 @@ Updating keeps your images, containers, volumes and settings. Containers stop an
 
 ### Files
 
-| File | Model | Size | SHA-256 |
-|---|---|---|---|
+| File | Model | CPU | Size | SHA-256 |
+|---|---|---|---|---|
 ${BIN_ROWS}
-Inputs: \`docker-$VERSION.tgz\` sha256 \`$ENGINE_SHA256\` · \`docker-compose-linux-x86_64\` sha256 \`$COMPOSE_SHA256\`
+Inputs (sha256):
+
+| CPU | Docker Engine | docker compose |
+|---|---|---|
+${INPUT_ROWS}
 EOF
-log "Docker $VERSION (docker-$VERSION.tgz sha256 $ENGINE_SHA256), docker compose $COMPOSE_VERSION"
+log "Docker $VERSION, docker compose $COMPOSE_VERSION, for ${ARCHES[*]}"
 log "wrote $OUT/SHA256SUMS and $OUT/release-notes.md"
 log "build folder kept, delete it by hand when done: $WORK"
 log "install it in the NAS dashboard: Apps > Install an app manually"
