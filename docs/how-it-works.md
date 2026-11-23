@@ -19,6 +19,7 @@ The app keeps the Docker program and your data apart, the same way WD's own Plex
 ## Limitations of the WD firmware
 
 - **Disk usage**: the WD kernel has no overlayfs, so Docker uses the `vfs` storage driver, which stores every image layer as a full copy. Images take several times more disk space than on a typical Linux machine (about 10 GB for ten common images).
+- **File capabilities**: the data volume can't store `security.*` extended attributes, so Docker drops them from image files (`vfs.xattrs=i_want_broken_containers`, as Docker 20.10 did without asking). Without this, pulling images like `louislam/uptime-kuma` fails. A container that runs as a normal user and relies on a file capability (for example to open a port below 1024) fails when it starts. `docker info` warns about this setup.
 - **cgroup v1**: the WD kernel (4.14) only has cgroup v1. Docker 29 supports it, but has announced its removal by May 2029. Releases follow new Docker versions automatically, new major versions included, so check the release notes before installing a new major.
 - **Container port isolation**: the kernel has no iptables `raw` table, so Docker runs with `DOCKER_INSECURE_NO_IPTABLES_RAW=1`. This drops a hardening rule that blocks other hosts on your LAN from reaching container ports directly through routing; ports you publish with `-p` work as usual.
 - **IPv6**: container IPv6 NAT is off (`"ip6tables": false`), because the kernel lacks `ip6table_nat`.
@@ -42,6 +43,7 @@ What the WD firmware needs, and what the app does about it:
 |---|---|
 | The root filesystem is rebuilt in RAM at every boot | Recreates the `docker` links and mounts at every boot (`init.sh`, `start.sh`) |
 | No overlayfs | `"storage-driver": "vfs"` and the classic image store (`"containerd-snapshotter": false`) |
+| The data volume can't store `security.*` extended attributes | `dockerd --storage-opt vfs.xattrs=i_want_broken_containers` (only if `daemon.json` sets no `storage-opts`; off with `DROP_XATTRS=0` in `dockerctl.conf`) |
 | One combined `cpu,memory` cgroup hierarchy on `/sys/fs/cgroup` | Replaces it with the standard layout (one mount per controller), only if nothing uses it |
 | No iptables `raw` table, no `ip6table_nat` | `DOCKER_INSECURE_NO_IPTABLES_RAW=1`, `"ip6tables": false` |
 | `pivot_root` fails on the RAM root filesystem | `DOCKER_RAMDISK=1` |

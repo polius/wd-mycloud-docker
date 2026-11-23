@@ -61,6 +61,7 @@ START_TIMEOUT=90         # seconds to wait for dockerd to answer
 BIN_DIR=/sbin            # where the docker commands are linked (in RAM, made at boot)
 PLUGIN_DIR=/usr/local/lib/docker/cli-plugins
 MODULE_DIR=/usr/local/modules/driver
+DROP_XATTRS=1            # 1: drop file xattrs the volume can't store (see vfs_storage_opts)
 
 [[ -f $BASE/dockerctl.conf ]] && . "$BASE/dockerctl.conf"
 
@@ -191,6 +192,22 @@ write_daemon_json() {
 }
 EOF
   log "wrote $DAEMON_JSON"
+}
+
+# The data volume can't store security.* extended attributes (e.g. the
+# security.capability that lets a non-root /usr/bin/ping open raw sockets). With vfs,
+# every layer file is written straight onto the volume, so Docker 25+ aborts the pull:
+#   failed to register layer: lsetxattr ...: operation not supported
+# Docker 20.10 (the old community app) dropped those attributes silently; this flag
+# makes Docker do the same. It is a flag, not a daemon.json line, so it also reaches
+# installs whose daemon.json was written before. Skipped when daemon.json sets its own
+# "storage-opts" (dockerd refuses a setting given both ways), when the driver isn't
+# vfs, or with DROP_XATTRS=0 in dockerctl.conf.
+vfs_storage_opts() {
+  (( DROP_XATTRS )) || return 0
+  grep -Eq '"storage-driver"[[:space:]]*:[[:space:]]*"vfs"' "$DAEMON_JSON" || return 0
+  grep -q '"storage-opts"' "$DAEMON_JSON" && return 0
+  echo "--storage-opt vfs.xattrs=i_want_broken_containers"
 }
 
 # ---------------------------------------------------------------- host preparation
@@ -327,12 +344,17 @@ do_start() {
   fi
   ulimit -n 1048576 2>/dev/null || ulimit -n 65536 2>/dev/null
 
+  local -a opts
+  read -r -a opts <<<"$(vfs_storage_opts)"
+  (( ${#opts[@]} )) && log "dropping file xattrs the volume can't store (${opts[*]})"
+
   log "starting dockerd $(app_version) (data: $DATA_ROOT)"
   (
     # own session if possible; otherwise its own process group and SIGHUP ignored
     [[ ${#SETSID[@]} -eq 0 ]] && trap '' HUP
     exec "${SETSID[@]}" env "${envs[@]}" "$ENGINE_DIR/dockerd" \
-      --config-file "$DAEMON_JSON" --pidfile "$PIDFILE" -H "unix://$SOCK"
+      --config-file "$DAEMON_JSON" --pidfile "$PIDFILE" -H "unix://$SOCK" \
+      ${opts[@]+"${opts[@]}"}
   ) </dev/null >>"$DOCKERD_LOG" 2>&1 &
 
   for (( i = 0; i < START_TIMEOUT; i++ )); do
