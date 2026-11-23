@@ -14,8 +14,9 @@
 #     bash -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends \
 #              curl ca-certificates openssl libxml2 >/dev/null && bash /out/make-app.sh'
 #
-# Result:  app-build/<model>_docker_<VERSION>.bin (one per model in MODELS), SHA256SUMS and
-#          release-notes.md. Install the .bin in the NAS dashboard
+# Result:  app-build/<model>_docker_<VERSION>.bin (one per model in MODELS), SHA256SUMS,
+#          release-notes.md, and release-parts/ (the same notes in pieces, which the release
+#          workflow merges when models are built separately). Install the .bin in the NAS dashboard
 #          (Apps > Install an app manually). Installing a newer one later = updating
 #          Docker; containers, images and volumes stay in <volume>/Nas_Prog/docker_data.
 #
@@ -147,7 +148,7 @@ fetch_engine() {   # fetch_engine <version> <arch> <app folder>: engine/ with do
   cp "$dl/docker-compose" "$app/engine/docker-compose" && chmod 755 "$app/engine/docker-compose" \
     || die "cannot copy docker compose into $app"
   COMPOSE_SHA256=$have
-  INPUT_ROWS+="| $arch | \`docker-$v.tgz\` \`$ENGINE_SHA256\` | \`docker-compose-linux-$ca\` \`$COMPOSE_SHA256\` |"$'\n'
+  INPUT_ROWS+="| $arch | \`docker-$v.tgz\` \`$ENGINE_SHA256\` | \`docker-compose-linux-$ca\` $COMPOSE_VERSION \`$COMPOSE_SHA256\` |"$'\n'
   log "docker compose $COMPOSE_VERSION ($ca) ready (sha256 $have)"
 }
 
@@ -394,7 +395,7 @@ fi
 # mksapkg works in the current folder and writes ../<model>*.bin*
 WORK=$OUT/${APP_NAME}-build
 [[ -e $WORK ]] && die "$WORK already exists (earlier build): delete it by hand first"
-for f in "${MODELS[@]/%/_${APP_NAME}_${VERSION}.bin}" SHA256SUMS release-notes.md; do
+for f in "${MODELS[@]/%/_${APP_NAME}_${VERSION}.bin}" SHA256SUMS release-notes.md release-parts; do
   [[ -e $OUT/$f ]] && die "$OUT/$f already exists: delete it by hand first"
 done
 mkdir "$WORK" && mkdir "$WORK/tools" || die "cannot create $WORK"
@@ -457,8 +458,11 @@ for ARCH in "${ARCHES[@]}"; do
   done
 done
 
-# Release notes (used by the GitHub release; handy for a local build too)
-cat >"$OUT/release-notes.md" <<EOF
+# Release notes: release-notes.md for this build, and the same in pieces in release-parts/
+# (header.md, bins.md, inputs.md, extra.md), which the release workflow merges into one
+# release when the models are built in separate runs (.github/release-notes.py).
+mkdir -p "$OUT/release-parts" || die "cannot create $OUT/release-parts"
+cat >"$OUT/release-parts/header.md" <<EOF
 Docker Engine **$VERSION** packaged as an app for WD My Cloud OS5.
 
 | Component | Version | Source |
@@ -472,19 +476,16 @@ Docker Engine **$VERSION** packaged as an app for WD My Cloud OS5.
 2. In the NAS dashboard: **Apps > Install an app manually**, and choose it.
 
 Updating keeps your images, containers, volumes and settings. Containers stop and, if they have a restart policy, start again by themselves. See the [README](https://github.com/polius/wd-mycloud-docker#updating-docker) for details.
-
-### Files
-
-| File | Model | CPU | Size | SHA-256 |
-|---|---|---|---|---|
-${BIN_ROWS}
-Inputs (sha256):
-
-| CPU | Docker Engine | docker compose |
-|---|---|---|
-${INPUT_ROWS}
-${PAGEFIX_NOTE}
 EOF
+printf '%s' "$BIN_ROWS" >"$OUT/release-parts/bins.md"
+printf '%s' "$INPUT_ROWS" >"$OUT/release-parts/inputs.md"
+printf '%s' "$PAGEFIX_NOTE" >"$OUT/release-parts/extra.md"
+{
+  cat "$OUT/release-parts/header.md"
+  printf '\n### Files\n\n| File | Model | CPU | Size | SHA-256 |\n|---|---|---|---|---|\n%s\n' "$BIN_ROWS"
+  printf 'Inputs (sha256):\n\n| CPU | Docker Engine | docker compose |\n|---|---|---|\n%s\n' "$INPUT_ROWS"
+  [[ -n $PAGEFIX_NOTE ]] && printf '%s\n' "$PAGEFIX_NOTE"
+} >"$OUT/release-notes.md"
 log "Docker $VERSION, docker compose $COMPOSE_VERSION, for ${ARCHES[*]}"
 log "wrote $OUT/SHA256SUMS and $OUT/release-notes.md"
 log "build folder kept, delete it by hand when done: $WORK"

@@ -118,7 +118,7 @@ docker run --rm --platform linux/amd64 -v "$PWD/app-build:/out" debian:bookworm-
   bash /out/make-app.sh'
 ```
 
-The build runs in a throwaway container that can only write to `app-build/`. Pass a version to build a specific one (`bash /out/make-app.sh 29.9.3`), and `-e MODELS="MyCloudPR2100"` to build only some models. It produces one `.bin` per model, `SHA256SUMS` and `release-notes.md`.
+The build runs in a throwaway container that can only write to `app-build/`. Pass a version to build a specific one (`bash /out/make-app.sh 29.9.3`), and `-e MODELS="MyCloudPR2100"` to build only some models. It produces one `.bin` per model, `SHA256SUMS` and `release-notes.md` (and `release-parts/`, the same notes in pieces for the release workflow).
 
 `make-app.sh` downloads WD's packaging tool from the [WDCommunity](https://github.com/WDCommunity/wdpksrc) project at a pinned commit and refuses to run it unless its SHA-256 matches. For the ARM models it also downloads the official Go release named in `make-app.sh` (checked the same way), runs pagefix's tests, builds it, and stops if any program in the ARM engine wouldn't load with 32 KB pages.
 
@@ -135,4 +135,6 @@ The release notes also list the SHA-256 of Docker's official `docker-<version>.t
 
 ## How releases are made
 
-Every day, a [workflow](../.github/workflows/release.yml) checks download.docker.com for a new stable Docker release. If there is one, it builds the app for every supported model and publishes it as a release named after the Docker version (`v29.9.3`). New major versions (e.g. 30) are published the same way.
+Every day, a [workflow](../.github/workflows/release.yml) checks download.docker.com for a new stable Docker release. If there is one, it builds the app for every supported model and publishes it as one release named after the Docker version (`v29.9.3`), with every model's `.bin` and one `SHA256SUMS`. New major versions (e.g. 30) are published the same way.
+
+The Intel and the ARM models are built one after the other, each adding its files to that release. If one of them fails to build, the release still comes out with the others' files, and the next day's run adds the missing ones.

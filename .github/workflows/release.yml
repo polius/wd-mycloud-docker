@@ -1,7 +1,13 @@
 name: Release
 
 # Daily: if Docker published a new stable release, build the app (.bin) for every model
-# and publish it as a GitHub release "v<docker version>". Nothing new: the run just ends.
+# and publish it as ONE GitHub release "v<docker version>" holding every model's .bin,
+# one SHA256SUMS and one set of notes. Nothing new: the run just ends.
+#
+# The models are built in groups (MODEL_GROUPS), one after the other, and each group adds
+# its files to that same release. So a failed group (e.g. the ARM build) doesn't hold back
+# the others: the release goes out with what built, the run is marked failed, and the next
+# run builds the groups whose files are missing from the release.
 #
 # Actions are pinned to full commit SHAs (tag in the trailing comment); Dependabot bumps both.
 
@@ -18,6 +24,14 @@ on:
         description: "If that release already exists, rebuild it and replace its files"
         type: boolean
         default: false
+      groups:
+        description: "Only these model groups, e.g. arm (empty: every group whose files are missing)"
+        required: false
+        default: ""
+      draft:
+        description: "Test run: publish to a draft release tagged test-v<version>, not visible to users"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -27,25 +41,36 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # mksapkg model names, one .bin each (make-app.sh's model_arch says which engine each gets),
-  # and the engine architectures they need: a version is built only once Docker has
+  # Model groups, built one after the other in this order. models: mksapkg model names, one
+  # .bin each (make-app.sh's model_arch says which engine each gets).
+  MODEL_GROUPS: >-
+    [{"name": "intel", "title": "Intel models (PR2100, PR4100)",
+      "models": "MyCloudPR2100 MyCloudPR4100"},
+     {"name": "arm", "title": "ARM models (EX2 Ultra, EX2100, EX4100, Mirror Gen 2)",
+      "models": "MyCloudEX2Ultra WDMyCloudEX2100 WDMyCloudEX4100 WDMyCloudMirror"}]
+  # The engine architectures the groups need: a version is built only once Docker has
   # published it for all of them.
-  MODELS: "MyCloudPR2100 MyCloudPR4100 MyCloudEX2Ultra WDMyCloudEX2100 WDMyCloudEX4100 WDMyCloudMirror"
   ENGINE_ARCHES: "x86_64 armhf"
+  GH_REPO: ${{ github.repository }}
 
 jobs:
-  release:
+  pick:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+      tag: ${{ steps.pick.outputs.tag }}
+      latest: ${{ steps.pick.outputs.latest }}
+      groups: ${{ steps.pick.outputs.groups }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Pick the Docker version
+      - name: Pick the Docker version and the groups to build
         id: pick
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_GROUPS: ${{ inputs.groups }}
           REPLACE: ${{ inputs.replace }}
+          DRAFT: ${{ inputs.draft }}
         run: |
           set -euo pipefail
           url=https://download.docker.com/linux/static/stable
@@ -61,14 +86,26 @@ jobs:
 
           [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::no valid Docker version ('$version')"; exit 1; }
           grep -qx "$version" <<<"$all" || { echo "::error::Docker $version is not published at $url for all of: $ENGINE_ARCHES"; exit 1; }
+          tag=v$version
+          [[ ${DRAFT:-false} == true ]] && tag=test-v$version
 
-          build=true; exists=false
-          if gh release view "v$version" >/dev/null 2>&1; then
-            exists=true
-            if [[ ${REPLACE:-false} != true ]]; then
-              build=false
-              echo "Release v$version already exists: nothing to do."
-            fi
+          # Groups to build: those asked for (default: all), minus those whose every .bin is
+          # already in the release, unless replacing.
+          assets=$(gh release view "$tag" --json assets --jq '.assets[].name' 2>/dev/null || true)
+          groups=$(jq -c --arg v "$version" --arg assets "$assets" --arg only "${INPUT_GROUPS:-}" \
+                      --arg replace "${REPLACE:-false}" '
+            ($assets | split("\n")) as $have
+            | ($only | split(" ") | map(select(. != ""))) as $only
+            | [ .[]
+                | select(($only | length) == 0 or (.name as $n | $only | index($n)))
+                | select($replace == "true"
+                         or any(.models | split(" ")[]; . as $m | $have | index("\($m)_docker_\($v).bin") | not)) ]' \
+                   <<<"$MODEL_GROUPS")
+          if [[ -n ${INPUT_GROUPS:-} ]]; then
+            for g in $INPUT_GROUPS; do
+              jq -e --arg g "$g" 'any(.[]; .name == $g)' <<<"$MODEL_GROUPS" >/dev/null \
+                || { echo "::error::unknown group '$g'"; exit 1; }
+            done
           fi
 
           # "Latest" only if no higher version has been released (e.g. a manual older build)
@@ -78,16 +115,32 @@ jobs:
 
           {
             echo "version=$version"
-            echo "build=$build"
-            echo "exists=$exists"
+            echo "tag=$tag"
             echo "latest=$latest"
+            echo "groups=$groups"
           } >>"$GITHUB_OUTPUT"
-          echo "Docker $version: build=$build exists=$exists latest=$latest (newest published: $newest)"
+          names=$(jq -r 'map(.name) | join(" ")' <<<"$groups")
+          echo "Docker $version ($tag): groups to build: ${names:-none} (newest published: $newest, latest=$latest)"
+
+  build:
+    needs: pick
+    if: needs.pick.outputs.groups != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      # one group at a time, in MODEL_GROUPS order; a failed group doesn't stop the next
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.pick.outputs.groups) }}
+    name: build (${{ matrix.group.name }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build the app
-        if: steps.pick.outputs.build == 'true'
         env:
-          VERSION: ${{ steps.pick.outputs.version }}
+          VERSION: ${{ needs.pick.outputs.version }}
+          MODELS: ${{ matrix.group.models }}
         run: |
           set -euo pipefail
           mkdir app-build
@@ -99,22 +152,38 @@ jobs:
                      bash /out/make-app.sh "$1"' _ "$VERSION"
           (cd app-build && sha256sum -c SHA256SUMS)
 
-      - name: Publish the release
-        if: steps.pick.outputs.build == 'true'
+      - name: Add it to the release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.pick.outputs.version }}
-          EXISTS: ${{ steps.pick.outputs.exists }}
-          LATEST: ${{ steps.pick.outputs.latest }}
+          VERSION: ${{ needs.pick.outputs.version }}
+          TAG: ${{ needs.pick.outputs.tag }}
+          LATEST: ${{ needs.pick.outputs.latest }}
+          GROUP: ${{ matrix.group.name }}
+          DRAFT: ${{ inputs.draft }}
         run: |
           set -euo pipefail
           cd app-build
-          files=(*.bin SHA256SUMS)
-          if [[ $EXISTS == true ]]; then
-            gh release upload "v$VERSION" "${files[@]}" --clobber
-            gh release edit "v$VERSION" --notes-file release-notes.md
-          else
-            gh release create "v$VERSION" "${files[@]}" \
-              --title "Docker $VERSION" --notes-file release-notes.md \
-              --target "$GITHUB_SHA" --latest="$LATEST"
+          bins=(*.bin)
+          # The release as it is now (an earlier group of this run may have created it)
+          exists=false; : >old-body.md; : >old-sums
+          if gh release view "$TAG" --json body --jq .body >old-body.md 2>/dev/null; then
+            exists=true
+            gh release download "$TAG" --pattern SHA256SUMS --output old-sums --clobber 2>/dev/null || : >old-sums
           fi
+          # one SHA256SUMS for every .bin: the release's lines for other files, then this build's
+          awk 'NR == FNR { new[$2] = 1; next } !($2 in new)' SHA256SUMS old-sums >all-sums
+          cat SHA256SUMS >>all-sums
+          sort -k2 all-sums -o all-sums
+          mkdir upload && mv all-sums upload/SHA256SUMS
+          python3 ../.github/release-notes.py old-body.md release-parts "$GROUP" >notes.md
+
+          if [[ $exists == true ]]; then
+            gh release upload "$TAG" "${bins[@]}" upload/SHA256SUMS --clobber
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            flags=(--latest="$LATEST")
+            [[ ${DRAFT:-false} == true ]] && flags=(--draft)
+            gh release create "$TAG" "${bins[@]}" upload/SHA256SUMS \
+              --title "Docker $VERSION" --notes-file notes.md --target "$GITHUB_SHA" "${flags[@]}"
+          fi
+          echo "$GROUP: added ${bins[*]} to $TAG"
