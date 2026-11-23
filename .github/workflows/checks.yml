@@ -16,3 +16,16 @@ jobs:
         run: for f in make-app.sh dockerctl.sh export-docker-run.sh; do bash -n "$f"; done
       - name: ShellCheck
         run: shellcheck -S warning -s bash make-app.sh dockerctl.sh export-docker-run.sh
+
+  pagefix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: gofmt, vet and tests (with the Go version make-app.sh builds with)
+        run: |
+          v=$(sed -n 's/^GO_VERSION=\([0-9.]*\).*/\1/p' make-app.sh)
+          [[ -n $v ]] || { echo "::error::no GO_VERSION in make-app.sh"; exit 1; }
+          docker run --rm -v "$PWD/pagefix:/src" -w /src "golang:$v" sh -ec '
+            test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt needed"; exit 1; }
+            go vet ./... && GOARCH=arm GOARM=7 go vet ./...
+            go test ./...'

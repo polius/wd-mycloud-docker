@@ -7,6 +7,7 @@
 #   <volume>/Nas_Prog/docker/            the app (replaced at every app upgrade)
 #     dockerctl.sh                       this script
 #     engine/                            official static binaries + docker compose plugin
+#                                        (ARM: + pagefix as engine/runc, see below)
 #
 # Your Docker data lives OUTSIDE the app folder, next to it, so installing, upgrading or
 # uninstalling the app never touches it (same pattern as WD's own Plex app:
@@ -25,6 +26,8 @@
 # Commands (run as root, e.g.  bash /mnt/HD/HD_a2/Nas_Prog/docker/dockerctl.sh --status):
 #   --start | --stop | --restart | --status
 #   --links | --unlink   create / remove the command links (/sbin/docker, ...)
+#   --pagefix-check <container>   ARM: list the container's programs that can't load
+#                        with this NAS's memory page size (and whether pagefix can fix them)
 #
 # Commands that stop Docker re-launch themselves in the background when run over
 # SSH, because remote SSH may go through a container (e.g. cloudflared).
@@ -32,6 +35,12 @@
 # Updating Docker = installing the app .bin of the newer version in the NAS dashboard
 # (Apps > Install an app manually). Containers stop and come back by their restart
 # policies; images, containers and volumes stay in <volume>/Nas_Prog/docker_data/data.
+#
+# ARM models: the EX2 Ultra's kernel uses 32 KB memory pages, and the programs in most
+# current ARM images are built for 4 KB pages, so they can't load. In the ARM app,
+# engine/runc is pagefix (Docker's runc is engine/runc.real): before a container starts,
+# it re-lays out those programs in the container's own copy (images stay as they are),
+# then runs runc. Silent, and never in the way of a start. PAGEFIX=0 turns it off.
 #
 # NAS notes: the firmware has no setsid, no /dev/fd (no  < <(...)  here), and /tmp is
 # noexec. The root filesystem is in RAM, so the links in /sbin are made at every boot.
@@ -62,6 +71,7 @@ BIN_DIR=/sbin            # where the docker commands are linked (in RAM, made at
 PLUGIN_DIR=/usr/local/lib/docker/cli-plugins
 MODULE_DIR=/usr/local/modules/driver
 DROP_XATTRS=1            # 1: drop file xattrs the volume can't store (see vfs_storage_opts)
+PAGEFIX=1                # ARM app: 1 = fix programs built for 4 KB pages when containers start
 
 [[ -f $BASE/dockerctl.conf ]] && . "$BASE/dockerctl.conf"
 
@@ -339,6 +349,10 @@ do_start() {
   rm -f "$PIDFILE"
 
   local -a envs=("PATH=$ENGINE_DIR:$PATH" "DOCKER_RAMDISK=1")  # rootfs is in RAM: no pivot_root
+  if [[ -x $ENGINE_DIR/runc.real ]]; then                     # ARM app: pagefix is engine/runc
+    envs+=("PAGEFIX=$PAGEFIX")                                 # containerd passes it on to runc
+    [[ -n ${PAGEFIX_PAGE_SIZE:-} ]] && envs+=("PAGEFIX_PAGE_SIZE=$PAGEFIX_PAGE_SIZE")  # tests only
+  fi
   if ! iptables -t raw -L -n >/dev/null 2>&1; then
     envs+=("DOCKER_INSECURE_NO_IPTABLES_RAW=1")                # kernel has no iptable_raw
   fi
@@ -357,7 +371,11 @@ do_start() {
       ${opts[@]+"${opts[@]}"}
   ) </dev/null >>"$DOCKERD_LOG" 2>&1 &
 
-  for (( i = 0; i < START_TIMEOUT; i++ )); do
+  # ARM app: dockerd answers only once containers with a restart policy are back, and
+  # pagefix may first check a container's files (a new or changed container): wait longer
+  local wait=$START_TIMEOUT
+  [[ -x $ENGINE_DIR/runc.real ]] && (( wait < 900 )) && wait=900
+  for (( i = 0; i < wait; i++ )); do
     if daemon_answers; then
       log "dockerd $(daemon_version) is up"
       return 0
@@ -417,6 +435,32 @@ cmd_status() {
   f=$(foreign_dockerd) && echo "WARNING:           another dockerd is running: $f"
   [[ -x $ENGINE_DIR/docker-compose ]] && echo "compose plugin:    $("$ENGINE_DIR/docker-compose" version --short 2>/dev/null)"
   echo "docker on PATH:    $(command -v docker || echo none)"
+  if [[ -x $ENGINE_DIR/runc.real ]]; then
+    local ps; ps=$(getconf PAGESIZE 2>/dev/null)
+    if [[ $PAGEFIX == 0 ]]; then echo "pagefix:           off (PAGEFIX=0 in $BASE/dockerctl.conf)"
+    elif [[ -z $ps ]]; then echo "pagefix:           on when the memory page size is above 4096 (getconf not found)"
+    elif [[ $ps == 4096 ]]; then echo "pagefix:           not needed (memory page size 4096)"
+    else echo "pagefix:           on (memory page size $ps): fixes programs built for 4 KB pages when a container starts"
+    fi
+  fi
+}
+
+# --pagefix-check <container>: what in the container's copy can't load with this NAS's
+# page size, fixed or not. Prints to the terminal only; changes nothing.
+cmd_pagefix_check() {
+  local c=${1:-} id root mid dir
+  [[ -n $c ]] || die "usage: dockerctl.sh --pagefix-check <container>"
+  [[ -x $ENGINE_DIR/runc.real ]] || die "pagefix is only in the ARM app"
+  daemon_answers || die "dockerd is not running"
+  id=$(dk inspect --type container --format '{{.Id}}' "$c" 2>/dev/null) || die "no container '$c'"
+  root=$(dk info --format '{{.DockerRootDir}}')
+  mid=$(cat "$root/image/vfs/layerdb/mounts/$id/mount-id" 2>/dev/null) || die "cannot find the files of '$c' (vfs storage driver only)"
+  dir=$root/vfs/dir/$mid
+  [[ -d $dir ]] || die "cannot find the files of '$c' ($dir)"
+  echo "Container $c: programs that can't load with this NAS's memory page size (${PAGEFIX_PAGE_SIZE:-$(getconf PAGESIZE 2>/dev/null)}):"
+  # same program as engine/runc; named pagefix it checks instead of running runc
+  ( [[ -n ${PAGEFIX_PAGE_SIZE:-} ]] && export PAGEFIX_PAGE_SIZE
+    exec -a pagefix "$ENGINE_DIR/runc" -n -v "$dir" ) && echo "None: everything in it loads."
 }
 
 # ---------------------------------------------------------------- main
@@ -432,5 +476,6 @@ case ${1:-} in
   --status)    cmd_status ;;
   --links)     require_root; wait_for_volume; do_links ;;
   --unlink)    require_root; do_unlink ;;
+  --pagefix-check) require_root; cmd_pagefix_check "${2:-}" ;;
   *)           usage ;;
 esac

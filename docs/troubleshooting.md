@@ -49,6 +49,24 @@ Failed to set capabilities on file '/usr/bin/…': Not supported
 
 The NAS's disk can't store file capabilities, so setting one fails: in an image whose startup script runs `setcap`, or in a `Dockerfile` with `RUN setcap …`. The step is often not needed here: if it is there so a normal user can ping or open a port below 1024, containers already allow both. Remove the step from your `Dockerfile`, or run the program as root (`--user 0`, if the image supports it).
 
+## A container exits with code 139, or "ELF load command address/offset not page-aligned" (ARM models)
+
+```
+error while loading shared libraries: libc.so.6: ELF load command address/offset not page-aligned
+```
+
+The image's programs are built for 4 KB memory pages, and the EX2 Ultra's kernel uses 32 KB pages ([details](how-it-works.md#arm-models-memory-page-size)). The ARM app fixes them when a container starts. If one still fails, see what's left:
+
+```bash
+bash /mnt/HD/HD_a2/Nas_Prog/docker/dockerctl.sh --pagefix-check <container>
+```
+
+- **"would fix"**: installed after the container started (`apk add`, `apt-get install` in it). Run `docker restart <container>`.
+- **"can't fix"**: pagefix leaves that file alone, with the reason. Please [open an issue](https://github.com/polius/wd-mycloud-docker/issues) with the line and the image name.
+- **"None"** but it still fails: the program itself assumes 4 KB pages. Try an image based on Alpine 3.17, Debian 11 or 13, or Ubuntu 22.04, and please open an issue.
+
+Check that pagefix is on with `bash /mnt/HD/HD_a2/Nas_Prog/docker/dockerctl.sh --status` (the `pagefix:` line).
+
 ## Restart Docker
 
 ```bash

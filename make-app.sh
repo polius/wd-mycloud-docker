@@ -7,9 +7,9 @@
 # Usage:  bash make-app.sh [VERSION]      (default: the latest stable Docker release)
 #
 # Run it from the repository root, in a throwaway container that can only write to the
-# folder holding this script and dockerctl.sh (it builds next to itself):
+# folder holding this script, dockerctl.sh and pagefix/ (it builds next to itself):
 #
-#   mkdir app-build && cp make-app.sh dockerctl.sh app-build/
+#   mkdir app-build && cp -r make-app.sh dockerctl.sh pagefix app-build/
 #   docker run --rm --platform linux/amd64 -v "$PWD/app-build:/out" debian:bookworm-slim \
 #     bash -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends \
 #              curl ca-certificates openssl libxml2 >/dev/null && bash /out/make-app.sh'
@@ -23,6 +23,9 @@
 #   engine/          official static binaries from download.docker.com (docker-<VERSION>.tgz)
 #                    + the latest docker compose plugin from GitHub (sha256 checked),
 #                    for the model's CPU: x86_64 (Intel models) or armhf (ARM models)
+#                    ARM only: engine/runc is pagefix (built here from pagefix/, see its
+#                    main.go), which fixes programs built for 4 KB memory pages before a
+#                    container starts, then runs Docker's runc, renamed engine/runc.real
 #   dockerctl.sh     starts/stops the engine (see its header)
 #   init.sh, start.sh, stop.sh, install.sh, remove.sh, ...   the NAS app hooks
 #
@@ -32,7 +35,8 @@
 #
 # The .bin is made with WD's packaging tool mksapkg-OS5 (Linux x86_64; needs
 # libxml2.so.2 and openssl), downloaded from the WDCommunity project at a pinned
-# commit and checked against a known sha256 before it runs. It signs the app with
+# commit and checked against a known sha256 before it runs. pagefix (ARM models) is built
+# with the official Go release GO_VERSION, also checked against a known sha256. It signs the app with
 # Blowfish (openssl bf-cbc); on OpenSSL 3 this script turns on the "legacy" provider
 # for the build, and it fails if the signature (apkg.sign) comes out empty.
 
@@ -52,6 +56,8 @@ STATIC_URL=https://download.docker.com/linux/static/stable   # + /<arch>/docker-
 COMPOSE_URL=https://github.com/docker/compose/releases
 MKSAPKG_URL=https://raw.githubusercontent.com/WDCommunity/wdpksrc/f7a6c485b6285c342727006507f79bf5e4d119f0/mksapkg-OS5
 MKSAPKG_SHA256=62340b1d0eb0433fffa7ceb1a5b6d4886e69b93e6e60297b2f984f5f3557e67a
+GO_VERSION=1.27.4      # builds pagefix for the ARM models (https://go.dev/dl/)
+GO_SHA256=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840   # go$GO_VERSION.linux-amd64.tar.gz
 # Docker's current official mark ("docker-mark-ocean-blue.png" from Docker's logo kit,
 # https://www.docker.com/static/Docker-Logos-1.zip, via https://www.docker.com/company/newsroom/media-resources/),
 # scaled to fit a 256x256 transparent canvas with a 16 px margin (not cropped, stretched or recoloured)
@@ -145,6 +151,41 @@ fetch_engine() {   # fetch_engine <version> <arch> <app folder>: engine/ with do
   log "docker compose $COMPOSE_VERSION ($ca) ready (sha256 $have)"
 }
 
+# ---------------------------------------------------------------- pagefix (ARM)
+# The EX2 Ultra's kernel uses 32 KB memory pages; most current ARM images are built for
+# 4 KB pages and can't load. pagefix (pagefix/) re-lays out such programs. In the ARM app
+# it is engine/runc, so it runs before every container start; Docker's runc is kept,
+# unmodified, as engine/runc.real.
+build_pagefix() {   # build_pagefix <app folder>
+  local app=$1 gobin=$WORK/go/bin/go tgz=$WORK/download/go$GO_VERSION.linux-amd64.tar.gz
+  [[ -f $OUT/pagefix/main.go && -f $OUT/pagefix/go.mod ]] || die "pagefix/ must be next to make-app.sh"
+  [[ -x $app/engine/runc ]] || die "no runc in the $ARCH engine"
+  if [[ ! -x $gobin ]]; then
+    mkdir -p "$WORK/download" || die "cannot create $WORK/download"
+    log "downloading Go $GO_VERSION (to build pagefix)"
+    curl -fsSL --retry 3 -o "$tgz" "https://go.dev/dl/go$GO_VERSION.linux-amd64.tar.gz" || die "Go download failed"
+    [[ $(sha256_of "$tgz") == "$GO_SHA256" ]] || die "go$GO_VERSION.linux-amd64.tar.gz checksum mismatch: refusing to use it"
+    tar -xzf "$tgz" -C "$WORK" || die "cannot unpack Go"
+  fi
+  # everything Go writes stays in the build folder
+  local -a goenv=(GOTOOLCHAIN=local GOENV=off GOFLAGS= CGO_ENABLED=0 HOME="$WORK"
+                  GOCACHE="$WORK/go-cache" GOPATH="$WORK/go-path" GOMODCACHE="$WORK/go-path/mod")
+  ( cd "$OUT/pagefix" && env "${goenv[@]}" "$gobin" test ./... ) >&2 || die "pagefix tests failed"
+  ( cd "$OUT/pagefix" && env "${goenv[@]}" GOOS=linux GOARCH=arm GOARM=7 \
+      "$gobin" build -trimpath -ldflags='-s -w -buildid=' -o "$WORK/$ARCH/pagefix" . ) \
+    || die "cannot build pagefix for $ARCH"
+  ( cd "$OUT/pagefix" && env "${goenv[@]}" "$gobin" build -trimpath -o "$WORK/tools/pagefix" . ) \
+    || die "cannot build pagefix for this machine"
+  [[ $(elf_machine_of "$WORK/$ARCH/pagefix") == "$(elf_machine "$ARCH")" ]] || die "pagefix was not built for $ARCH"
+  mv "$app/engine/runc" "$app/engine/runc.real" && cp "$WORK/$ARCH/pagefix" "$app/engine/runc" \
+    && chmod 755 "$app/engine/runc" || die "cannot put pagefix in the engine"
+  # Every engine program, pagefix included, must load with the EX2 Ultra's 32 KB pages.
+  "$WORK/tools/pagefix" -n -v -page 32768 "$app/engine" >&2 \
+    || die "programs in the $ARCH engine would not load with 32 KB memory pages (list above)"
+  PAGEFIX_SHA256=$(sha256_of "$app/engine/runc")
+  log "pagefix built for $ARCH with Go $GO_VERSION (sha256 $PAGEFIX_SHA256)"
+}
+
 # ---------------------------------------------------------------- app files
 write_app_files() {   # write_app_files <app folder> <version>; folder name must be $APP_NAME
   local out=$1 v=$2
@@ -180,6 +221,8 @@ write_app_files() {   # write_app_files <app folder> <version>; folder name must
   cp "$out/web/$APP_NAME.png" "$out/$APP_NAME.png" || die "cannot copy the app icon"
 
   cp "$OUT/dockerctl.sh" "$out/dockerctl.sh" || die "dockerctl.sh must be next to make-app.sh"
+  local pagefix_row=""
+  [[ -x $out/engine/runc.real ]] && pagefix_row="<tr><td>pagefix</td><td>From this project (source in <code>pagefix/</code>), built with Go $GO_VERSION. This NAS's kernel uses large memory pages, and programs in most current ARM images are built for 4 KB pages: before a container starts, pagefix re-lays out the ones that wouldn't load (in the container's own copy; images are not changed), then runs Docker's runc. Turn it off with <code>PAGEFIX=0</code> in <code>@DATA@/dockerctl.conf</code>.<br><small><code>engine/runc</code> is pagefix; Docker's runc is <code>engine/runc.real</code>, unmodified. sha256 of pagefix: <code>$PAGEFIX_SHA256</code></small></td></tr>"
 
   # Hooks run by the NAS. Every one logs to /tmp/debug_apkg (the NAS's app debug log).
   # They find dockerctl.sh next to themselves, in the installed app folder.
@@ -275,6 +318,7 @@ table{border-collapse:collapse;width:100%} td{padding:.35rem .5rem;border-bottom
 <table>
 <tr><td>Docker Engine</td><td>$v ($ARCH): Docker's official static binaries from <code>download.docker.com</code>, unmodified.<br><small>sha256 of docker-$v.tgz: <code>$ENGINE_SHA256</code></small></td></tr>
 <tr><td>docker compose</td><td>$COMPOSE_VERSION: Docker's official plugin from <code>github.com/docker/compose</code>, checksum verified.<br><small>sha256: <code>$COMPOSE_SHA256</code></small></td></tr>
+$pagefix_row
 </table>
 
 <h2>Where things are on this NAS</h2>
@@ -369,7 +413,7 @@ if ! bf_ok; then
   log "OpenSSL 3: legacy provider turned on for this build (mksapkg signs with Blowfish)"
 fi
 
-ENGINE_SHA256=""; COMPOSE_SHA256=""; BIN_ROWS=""; INPUT_ROWS=""
+ENGINE_SHA256=""; COMPOSE_SHA256=""; PAGEFIX_SHA256=""; PAGEFIX_NOTE=""; BIN_ROWS=""; INPUT_ROWS=""
 url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$COMPOSE_URL/latest") || die "cannot reach GitHub"
 COMPOSE_VERSION=${url##*/v}
 [[ $COMPOSE_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "cannot find the latest docker compose version ($url)"
@@ -381,6 +425,11 @@ for ARCH in "${ARCHES[@]}"; do
   APP=$PKG/$APP_NAME
   mkdir -p "$APP" || die "cannot create $APP"
   fetch_engine "$VERSION" "$ARCH" "$APP"
+  PAGEFIX_SHA256=""
+  if [[ $ARCH == armhf ]]; then
+    build_pagefix "$APP"
+    PAGEFIX_NOTE="The ARM apps also contain **pagefix**, from this project ([source](https://github.com/polius/wd-mycloud-docker/tree/main/pagefix), built with Go $GO_VERSION, sha256 \`$PAGEFIX_SHA256\`): it makes programs built for 4 KB memory pages load on the EX2 Ultra's 32 KB-page kernel, when a container starts."
+  fi
   ( write_app_files "$APP" "$VERSION" ) || die "cannot write the app files (build folder kept: $WORK)"
 
   for m in "${MODELS[@]}"; do
@@ -434,6 +483,7 @@ Inputs (sha256):
 | CPU | Docker Engine | docker compose |
 |---|---|---|
 ${INPUT_ROWS}
+${PAGEFIX_NOTE}
 EOF
 log "Docker $VERSION, docker compose $COMPOSE_VERSION, for ${ARCHES[*]}"
 log "wrote $OUT/SHA256SUMS and $OUT/release-notes.md"
