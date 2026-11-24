@@ -91,7 +91,6 @@ model_arch() {
 # shown next to the model in the release notes
 model_note() {
   case $1 in
-    MyCloudEX2Ultra) echo " (untested: [please report](https://github.com/polius/wd-mycloud-docker/issues/7) if it works)" ;;
     WDMyCloudEX2100|WDMyCloudEX4100|WDMyCloudMirror)
                      echo " (untested: [please report](https://github.com/polius/wd-mycloud-docker/issues) if it works)" ;;
   esac
